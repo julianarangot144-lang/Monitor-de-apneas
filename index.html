@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Apnea - ITM</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a73e8">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; }
+        h2 { color: #1a73e8; margin: 10px 0 20px 0; text-align: center; font-size: 1.5rem; font-weight: 700; }
+        .monitor-container { width: 100%; max-width: 420px; display: grid; grid-template-columns: 1fr; gap: 12px; }
+        .card { background: white; padding: 15px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.03); text-align: center; border: 1px solid #e0e4ec; }
+        .card-label { font-size: 0.8rem; color: #5f6368; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+        .card-value { font-size: 2rem; font-weight: bold; color: #202124; margin: 5px 0; }
+        .card-unit { font-size: 0.85rem; color: #70757a; }
+        
+        .comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
+        .diagnostic-card { background: #ffffff; border: 1px solid #e0e4ec; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 15px; border-radius: 15px; }
+        .diagnostic-card.antena { border: 2px solid #1a73e8; background: #e8f0fe; }
+        
+        .system-title { font-size: 0.9rem; font-weight: bold; color: #202124; margin-bottom: 5px; text-transform: uppercase;}
+        .iah-value { font-size: 1.6rem; font-weight: bold; color: #1a73e8; margin: 4px 0; }
+        .status-badge { padding: 4px 12px; border-radius: 15px; font-size: 0.8rem; font-weight: bold; display: inline-block; text-align: center; width: 80%; }
+    </style>
+</head>
+<body>
+
+    <h2>Panel de Monitoreo Móvil</h2>
+
+    <div class="monitor-container">
+        <div class="card">
+            <div class="card-label">Frecuencia Cardíaca</div>
+            <div class="card-value" id="fc">--</div>
+            <div class="card-unit">Promedio BPM</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Saturación SpO2</div>
+            <div class="card-value" id="spo2">--</div>
+            <div class="card-unit">Promedio %</div>
+        </div>
+
+        <div class="card">
+            <div class="card-label">Eventos Totales</div>
+            <div class="card-value" id="eventos">--</div>
+            <div class="card-unit">Detecciones Sistema Propuesto</div>
+        </div>
+
+        <div class="comparison-grid">
+            <div class="diagnostic-card">
+                <div class="system-title">Banda Torácica</div>
+                <div class="iah-value" id="iah-banda">--.-</div>
+                <div id="severidad-banda" class="status-badge" style="background-color: #e8eaed; color: #3c4043;">Cargando...</div>
+            </div>
+
+            <div class="diagnostic-card antena">
+                <div class="system-title" style="color: #1a73e8;">Sistema Antena</div>
+                <div class="iah-value" id="iah-antena" style="color: #1967d2;">--.-</div>
+                <div id="severidad-antena" class="status-badge">Cargando...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SUPABASE_URL = "https://zhzzxkeoayycjinybirh.supabase.co";
+        const SUPABASE_KEY = "sb_publishable_8BgHrNJ7mXe5qSbKwJIPTw_rBUyDwUf";
+        
+        // Usamos supabaseClient para evitar conflictos de variables globales
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        async function iniciarMonitoreo() {
+            console.log("Conectando con Supabase...");
+            
+            const { data, error } = await supabaseClient
+                .from('diagnosticos')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(1);
+
+            if (error) {
+                console.error("Error de Supabase:", error);
+                alert("Error al conectar con la base de datos: " + error.message);
+                return;
+            }
+
+            console.log("Datos recibidos de Supabase:", data);
+
+            if (data && data.length > 0) {
+                actualizarPantalla(data[0]);
+            } else {
+                console.warn("Conexión exitosa, pero no se encontraron registros.");
+            }
+
+            supabaseClient
+                .channel('cambios-reales')
+                .on('postgres_changes', { event: 'INSERT', table: 'diagnosticos' }, payload => {
+                    console.log("¡Nuevo registro detectado en tiempo real!", payload.new);
+                    actualizarPantalla(payload.new);
+                    if (navigator.vibrate) navigator.vibrate(300);
+                })
+                .subscribe();
+        }
+
+        function colorearBadge(badge, estado) {
+            if (!estado) {
+                badge.innerText = "Cargando...";
+                return;
+            }
+            badge.innerText = estado;
+            if(estado.includes("Sever")) {
+                badge.style.backgroundColor = "#fad2cf"; badge.style.color = "#a50e0e";
+            } else if(estado.includes("Moder")) {
+                badge.style.backgroundColor = "#feefc3"; badge.style.color = "#a36e00";
+            } else if(estado.includes("Leve")) {
+                badge.style.backgroundColor = "#e8f0fe"; badge.style.color = "#1a73e8";
+            } else {
+                badge.style.backgroundColor = "#ceead6"; badge.style.color = "#0d652d";
+            }
+        }
+
+        function actualizarPantalla(datos) {
+            document.getElementById('fc').innerText = datos.fc_promedio || "--";
+            document.getElementById('spo2').innerText = (datos.spo2_promedio || "--") + "%";
+            document.getElementById('eventos').innerText = datos.total_eventos || "0";
+            
+            // LECTURA DE LA ANTENA
+            document.getElementById('iah-antena').innerText = datos.iah_oficial ? datos.iah_oficial.toFixed(2) : "--";
+            colorearBadge(document.getElementById('severidad-antena'), datos.severidad || "Normal");
+
+            // LECTURA REAL DE LA BANDA DESDE SUPABASE
+            document.getElementById('iah-banda').innerText = datos.iah_banda ? datos.iah_banda.toFixed(2) : "--";
+            colorearBadge(document.getElementById('severidad-banda'), datos.severidad_banda || "Normal"); 
+        }
+
+        iniciarMonitoreo();
+
+        // Registro del Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log("Service Worker registrado con éxito.", reg))
+                    .catch(err => console.error("Error al registrar el Service Worker:", err));
+            });
+        }
+    </script>
+</body>
+</html>
